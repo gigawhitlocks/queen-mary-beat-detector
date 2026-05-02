@@ -168,64 +168,6 @@ static WavInfo loadWave(const std::string& path) {
 
 
 /* ====================================================================
- * BPM calculation helper (mirrors qm-dsp resonator comb filter output)
- * ==================================================================== */
-
-/*
- * qm-dsp's TempoTrackV2 builds a resonator comb filter bank with period
- * indices 1..128 (wv_len). The period → BPM conversion in qm-dsp is:
- *
- *   BPM = rayparam × (period+1)^-1
- *
- * where rayparam = (60 × 44100 / stepSize) / inputTempo  [from source]
- *
- * Since the default inputTempo is 120, rayparam simplifies to the
- * conversion constant:
- *
- *   rayparam = 60 × sRate / stepSize
- */
-
-struct BeatResult {
-    int    beatPeriod;  // period index from resonator comb filter
-    double bpm;         // derived from period
-    double score;       // how strong this period was
-};
-
-static double bpmForPeriod(int period, double sRate, int stepSize) {
-    return (60.0 * sRate / stepSize) / double(period + 1);
-}
-
-/**
- * Compute the estimated BPM from the beat period contour.
- * Uses the same formula as qm-dsp's resonator comb filter bank.
- * Returns the period with the highest score (mode of period contour).
- */
-static double computeEstimatedBPM(
-        const std::vector<int>& beat_period,
-        const std::vector<double>& beat_scores,
-        double sRate,
-        int stepSize)
-{
-    double bestBPM = 0;
-    double bestScore = 0;
-
-    for (size_t i = 0; i < (beat_period.size() < beat_scores.size()
-                                ? beat_period.size()
-                                : beat_scores.size()); ++i) {
-        if (beat_period[i] < 1) continue;  // valid periods start at 1
-        double bpm = bpmForPeriod(beat_period[i], sRate, stepSize);
-        if (bpm < 20.0 || bpm > 400.0) continue;  // sanity range
-        double score = beat_scores[i];
-        if (score > bestScore) {
-            bestScore = score;
-            bestBPM = bpm;
-        }
-    }
-    return bestBPM;
-}
-
-
-/* ====================================================================
  * Main wrapper — mirrors AnalyzerQueenMaryBeats::finalize() line by line
  * ==================================================================== */
 
