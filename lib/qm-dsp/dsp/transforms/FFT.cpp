@@ -71,14 +71,18 @@ public:
         delete[] m_c;
     }
     void forward(const double *ri, double *ro, double *io) {
-        kiss_fftr(m_planf, (const float*)ri, m_c);
+        // Convert double[] → float[] (kissfft expects float input)
+        std::vector<float> finput(m_n);
+        for (int i = 0; i < m_n; ++i) finput[i] = static_cast<float>(ri[i]);
+        kiss_fftr(m_planf, finput.data(), m_c);
         for (int i = 0; i <= m_n/2; ++i) {
-            ro[i] = m_c[i].r;
-            io[i] = m_c[i].i;
+            ro[i] = static_cast<double>(m_c[i].r);
+            io[i] = static_cast<double>(m_c[i].i);
         }
-        for (int i = 0; i + 1 < m_n/2; ++i) {
-            ro[m_n - i - 1] = ro[i + 1];
-            io[m_n - i - 1] = -io[i + 1];
+        // Fill the redundant conjugate half (kiss_fftr only returns n/2+1 bins)
+        for (int i = 1; i < m_n/2; ++i) {
+            ro[m_n - i] = ro[i];
+            io[m_n - i] = -io[i];
         }
     }
     void forwardMagnitude(const double *ri, double *mo) {
@@ -90,12 +94,14 @@ public:
     }
     void inverse(const double *ri, const double *ii, double *ro) {
         for (int i = 0; i < m_n/2 + 1; ++i) {
-            m_c[i].r = (float)ri[i];
-            m_c[i].i = (float)ii[i];
+            m_c[i].r = static_cast<float>(ri[i]);
+            m_c[i].i = static_cast<float>(ii[i]);
         }
-        kiss_fftri(m_plani, m_c, (float*)ro);
+        // kiss_fftri writes float[] output; convert to double[]
+        std::vector<float> foutput(m_n);
+        kiss_fftri(m_plani, m_c, foutput.data());
         double scale = 1.0 / m_n;
-        for (int i = 0; i < m_n; ++i) ro[i] *= scale;
+        for (int i = 0; i < m_n; ++i) ro[i] = static_cast<double>(foutput[i]) * scale;
     }
     int m_n;
     kiss_fftr_cfg m_planf;
