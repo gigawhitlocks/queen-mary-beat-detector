@@ -40,15 +40,14 @@ public:
     explicit QueenMaryBeatDetector(const QueenMaryBeatConfig& cfg = {});
     ~QueenMaryBeatDetector();
 
-    // Feed interleaved stereo audio samples (L0, R0, L1, R1, ...)
+    // Feed audio samples (not byte count)
     void addStereo(const float* left, const float* right, size_t nFrames);
-    // Feed mono audio
     void addMono(const float* mono, size_t nFrames);
 
-    // Run analysis after all audio has been fed
+    // Run analysis — must call after all audio has been fed
     bool finalize();
 
-    // Results
+    // Query results
     std::vector<BeatEvent> getBeats()        const;
     double                   getEstimatedBPM() const;
 
@@ -57,16 +56,15 @@ private:
     std::unique_ptr<Impl> m_impl;
 };
 
-// ---- Minimal WAV loader ----
+// ---- Minimal WAV loader (no external deps) ----
 struct WavFile {
     double sampleRate = 0;
     int    channels   = 1;
     int    bitsPerSample = 16;
-    std::vector<float> samples;   // mono downmix
+    std::vector<float> samples;   // mono, normalized to [-1, 1]
     bool   valid = false;
     std::string error;
 };
-
 WavFile loadWavFile(const char* path);
 
 #endif // QM_BPM_H
