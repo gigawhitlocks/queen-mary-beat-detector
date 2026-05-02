@@ -1,1 +1,5 @@
+\#*
+analyze_audio
 build/
+*.o
+*.a
