@@ -43,7 +43,7 @@ All qm-dsp and kissfft sources are vendored under `lib/`.
 ### Output example
 
 ```
-Input: two.wav
+Input: metronome-ticks_4-4_120-BPM.wav
   Sample rate: 44100 Hz
   Channels: 2
   Frames: 705600
@@ -145,10 +145,10 @@ standard, mirroring every step:
 ### Phase III — Build and verify
 
 The result is verified against a 120 BPM metronome test file
-(`~/Documents/two.wav`):
+(`./metronome-ticks_4-4_120-BPM.wav`):
 
 ```
-./analyze_audio /home/ian/Documents/two.wav
+./analyze_audio ./metronome-ticks_4-4_120-BPM.wav
 # Expected: ~120 BPM, beats every 500 ms
 ```
 
