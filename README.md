@@ -37,25 +37,37 @@ All qm-dsp and kissfft sources are vendored under `lib/`.
 ## Usage
 
 ```bash
+# Default: Mixxx-style constant-region BPM snapping (musical BPM)
 ./analyze_audio <file.wav>
+
+# Queen Mary VAMP original: dominant period from resonator comb filter
+./analyze_audio --queen-mary <file.wav>
 ```
 
-### Output example
+### Output example (default — musical BPM)
 
 ```
-Input: metronome-ticks_4-4_120-BPM.wav
-  Sample rate: 44100 Hz
-  Channels: 2
-  Frames: 705600
-  Duration: 16.0 s
+=== RESULT ===
+BPM: 120  (method: musical)
+Beat interval: 500 ms
 
-DF frames collected: 1377
-Step size (samples): 512
-Window size (samples): 1024
-DF values used (after skip): 1375
-Number of beats detected: 31
-Estimated BPM: 117.5
-Beat interval: 511 ms
+DF frames: 1375  |  Step: 512  |  Window: 1024
+Beats detected: 31
+
+First 10 beats:
+  #0    frame=21248  time=0.482s
+  ...
+```
+
+### Output example (--queen-mary — contour BPM)
+
+```
+=== RESULT ===
+BPM: 118  (method: queen-mary)
+Beat interval: 508 ms
+
+DF frames: 1375  |  Step: 512  |  Window: 1024
+Beats detected: 31
 
 First 10 beats:
   #0    frame=21248  time=0.482s
@@ -64,19 +76,47 @@ First 10 beats:
 
 ### Expected results
 
-| Test file                  | Expected BPM | Beat interval |
-|----------------------------|------------- |---------------|
-| metronome ticks at 120 BPM | **120 ± 3**  | **~500 ms**    |
+| Test file                  | Default (musical) | --queen-mary  |
+|---------------------------|-------------------|---------------|
+| metronome ticks at 120 BPM | **120**           | ~117–119      |
 
-The wrapper is a thin C++ entry-point mirroring mixxx's
-`AnalyzerQueenMaryBeats` plugin line-by-line.  It:
+### Default mode: Mixxx-style "musical BPM" snapping
 
-1. Reads a WAV file (PCM 8/16/24/32-bit, mono or stereo)
-2. Downmixes stereo → mono (averaging channels)
-3. Applies the Hann window and frames with 512-sample hop
-4. Runs the Queen Mary DF_COMPLEXSD detection function
-5. Feeds detection function values into TempoTrackV2
-6. Outputs estimated BPM + beat positions
+By default, the wrapper replicates Mixxx's full BPM derivation pipeline:
+
+```
+beats[] (from TempoTrackV2)
+  → retrieveConstRegions()    ← "iron" the beat grid, find constant-spacing regions
+  → find longest region
+  → centreBPM = 60 × sr / beatLength  (beatLength in SAMPLE frames)
+  → roundBpmWithinRange()     ← snap to nearest musical BPM
+                               ← fractions: 1, 2, 2/3, 3, 1/12
+  → output: 80, 96, 106.7, 120, 144, … (integer or 1-digit decimal)
+```
+
+This matches Mixxx's `BeatFactory::makePreferredBeats()` →
+`BeatUtils::retrieveConstRegions()` → `BeatUtils::makeConstBpm()`.
+
+### --queen-mary mode: original VAMP contour BPM
+
+The `--queen-mary` flag uses the resonator comb filter output
+(`beatPeriod` from `calculateBeatPeriod()`) to compute BPM via the
+dominant period — this is how the original Queen Mary VAMP plugin computed
+BPM. Mixxx discarded this value and replaced it with the constant-region
+approach because it produces "hard" musical BPM values (80, 96, 120, 144)
+that are more suitable for DJ grid alignment.
+
+### What the wrapper adds beyond AnalyzerQueenMaryBeats
+
+The wrapper adds these capabilities that `AnalyzerQueenMaryBeats` does not
+provide:
+
+- WAV file reader (mixxx streams from `QAudioSource`)
+- Stereo → mono pre-downmix (`wav.samples[j + c]` averaged)
+- **Two BPM modes**:
+  - **Default** = Mixxx-style constant-region snapping → musical BPM
+  - **--queen-mary** = original VAMP dominant-period contour BPM
+- Console output
 
 ## Source layout
 
@@ -124,9 +164,13 @@ layout (e.g. `"dsp/transforms/FFT.h"` →
 ### Phase II — Write the wrapper
 
 A single C++ file (`src/analyze_audio.cpp`) was hand-written to glue
-the qm-dsp pieces together into a working beat detector.  It follows
-`mixxx/src/analyzer/plugins/analyzerqueenmarybeats.cpp` as the gold
-standard, mirroring every step:
+the qm-dsp pieces together into a working beat detector, then
+refactored to add Mixxx-style BPM snapping.
+
+**Part A — Beat detection (unchanged from mixxx):**
+
+The wrapper mirrors `mixxx/src/analyzer/plugins/analyzerqueenmarybeats.cpp`
+line-by-line through beat frame generation. It:
 
 - **Detection function config** — `DF_COMPLEXSD`, step size 512
   frames (11.6 ms @ 44.1 kHz), frame length 1024 samples
@@ -140,7 +184,20 @@ standard, mirroring every step:
   (gaussian transition σ = 8, α = 0.9 tightness)
 - **Beat tracking** — backtracking with dynamic programming (α = 0.9,
   tightness = 4)
-- **BPM conversion** — `BPM = (60 × sRate / hop) / (period + 1)`
+- **Frame conversion** → `beatFramePos = beats[i] × stepSize + stepSize/2`
+
+**Part B — BPM estimation (two modes):**
+
+| Mode | Method | BPM values |
+|------|--------|------------|
+| **Default** | Const-region snapping (Mixxx) | 80, 96, 106.7, 120, 144… |
+| **--queen-mary** | Resonator contour (VAMP) | 117.3, 120.7, 127.5… |
+
+The **default** mode adds `BeatUtils::retrieveConstRegions()`,
+`makeConstBpm()`, and `roundBpmWithinRange()` implemented in C++
+(from `mixxx/src/track/beatutils.h` + `beatutils.cpp`). This produces
+the same "hard" musical BPM values that Mixxx outputs — ideal for DJ
+grid alignment.
 
 ### Phase III — Build and verify
 
