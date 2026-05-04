@@ -151,12 +151,69 @@ beatPeriod[] (from resonator comb filter)
 
 ## Testing
 
+### Quick smoke test
+
 The project ships a 120 BPM metronome test file:
 
 ```bash
 ./analyze_audio metronome-ticks_4-4_120-BPM.wav
 # Expected: ~120 BPM, beats every 500 ms
 ```
+
+### Regression test suite
+
+A Python 3 (unmodified, system stock — **no virtualenv required**) regression
+test suite lives at `tests/test_default_bpm.py`.  It runs `analyze_audio`
+in its **default mode** (no `--queen-mary` flag) on a curated set of WAV
+files and checks the reported BPM against known reference values with
+2-decimal-place accuracy (`unittest.assertAlmostEqual`).
+
+**Run all tests from the project root:**
+
+```bash
+cd /home/ian/mixxx/extracted_qm_bpm
+python3 tests/test_default_bpm.py
+```
+
+Or equivalently (the script resolves all paths relative to its own location):
+
+```bash
+python3 tests/test_default_bpm.py
+```
+
+**Run a subset by name:**
+
+```bash
+python3 tests/test_default_bpm.py -k metronome     # only metronome files
+python3 tests/test_default_bpm.py -k Duvet          # only Duvet tracks
+python3 tests/test_default_bpm.py -k aNYway         # only aNYway tracks
+```
+
+**Verbosity and output modes:**
+
+```bash
+python3 tests/test_default_bpm.py -v               # verbose pass/fail listing
+python3 tests/test_default_bpm.py --tb=long        # include tracebacks on failure
+```
+
+### What the test covers
+
+| Test group | Files | Purpose |
+|---|---|---|
+| Metronome ticks | 5 WAV (60, 88, 120, 129, 144 BPM) | Crisp test tones — the analyzer should return the exact expected BPM |
+| Song excerpts | 7 WAV | Short clips (≈6 s each) for fast CI-like runs |
+| Full tracks | 5 WAV | Longer source tracks (up to ~9 M frames) |
+
+Each file in the table maps to a test method named
+`test_bpm_<stem>` (e.g. `test_bpm_01 - Duvet`).  Filenames are aligned to
+the **actual on-disk names** in the `metronome-ticks/` and `song-tests/`
+directories (e.g. `01` not `1`, `06` not `6`, `manaya` not `manyana`).
+
+### Adding a new reference file
+
+Append a `(relative_path, expected_bpm)` tuple to the `TESTS` list in
+`tests/test_default_bpm.py`.  The path is relative to `tests/` and the
+BPM should be the known-correct musical BPM to two decimal places.
 
 ## License
 
