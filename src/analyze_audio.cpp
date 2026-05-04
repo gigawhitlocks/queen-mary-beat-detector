@@ -4,10 +4,9 @@
  * pipeline (mirroring AnalyzerQueenMaryBeats in the mixxx codebase), and
  * prints the estimated BPM and beat locations.
  *
- * Gold-standard reference:
- *   mixxx/src/analyzer/plugins/analyzerqueenmarybeats.cpp
- *   mixxx/src/track/beatutils.h
- *   mixxx/src/track/beatutils.cpp
+ * BPM logic: BeatUtils from src/beatutils_standalone.h
+ *   (clean-room copy of Mixxx src/track/beatutils.h + beatutils.cpp)
+ *   Uses double-precision FramePos and FrameDiff_t per Mixxx source.
  *
  * Two BPM estimation modes:
  *   Default (Mixxx):    Beat grid → constant regions → musical BPM
@@ -37,7 +36,10 @@
 #include "lib/qm-dsp/dsp/onsets/DetectionFunction.h"
 #include "lib/qm-dsp/dsp/tempotracking/TempoTrackV2.h"
 
-/* === WAv loading via libsnDFe === */
+/* BPM logic from Mixxx: src/track/beatutils.h + beatutils.cpp + bpm.h */
+#include "src/beatutils_standalone.h"
+
+/* === WAV loading via libsndfile === */
 
 struct WavInfo {
     double       sampleRate;
@@ -72,275 +74,15 @@ static WavInfo loadWave(const std::string& path) {
     return info;
 }
 
-/* ====================================================================
- * Mixxx-style BeatUtils from mixxx/src/track/beatutils.h + beatutils.cpp
- *
- * Copied verbatim from Mixxx source, only Qt types replaced by stdlib.
+/* BPM types: Bpm, FramePos, FrameDiff_t, BeatUtils (from beatutils_standalone.h) */
+
+/* BPM uses BeatUtils from beatutils_standalone.h
+ * double-precision FramePos / FrameDiff_t per Mixxx source.
  */
-
-namespace mixxx_impl {
-
-namespace audio {
-    using FrameDiff_t = int64_t;
-    using FramePos    = FrameDiff_t;
-    using SampleRate  = int64_t;
-}
-
-/** BPM stored as raw double value. Matches mixxx/src/track/bpm.h */
-class Bpm {
-public:
-    static constexpr double kValueUndefined = 0.0;
-    static constexpr double kValueMin       = 0.0;   // exclusive
-    static constexpr double kValueMax       = 500.0; // inclusive
-
-    constexpr Bpm() noexcept : m_value(kValueUndefined) {}
-    explicit constexpr Bpm(double value) : m_value(value) {}
-    constexpr Bpm(int64_t v) : m_value(static_cast<double>(v)) {}
-
-    static bool isValidValue(double value) {
-        return std::isfinite(value) && value > kValueMin;
-    }
-
-    bool isValid() const { return isValidValue(m_value); }
-    double value() const { return m_value; }
-
-    Bpm operator*(double f) const  { return Bpm(m_value * f); }
-    Bpm operator/(double f) const  { return Bpm(m_value / f); }
-    Bpm operator+(double f) const  { return Bpm(m_value + f); }
-    Bpm operator-(double f) const  { return Bpm(m_value - f); }
-    bool operator>(const Bpm& o) const  { return m_value > o.value(); }
-    bool operator<(const Bpm& o) const  { return m_value < o.value(); }
-
-private:
-    double m_value;
-};
-
-namespace {
-
-static constexpr double kMaxSecsPhaseErr   = 0.025;
-static constexpr double kMaxSecsPhaseErrSum = 0.1;
-static constexpr int    kMaxOutliers       = 1;
-static constexpr int    kMinRegionBeats    = 16;
 
 struct ConstRegion {
-    mixxx_impl::audio::FramePos firstBeat;
-    int64_t beatLength;
+    // Uses BeatUtils::ConstRegion (audio::FramePos, audio::FrameDiff_t)
 };
-
-/** Copied from mixxx/src/track/beatutils.cpp retrieveConstRegions */
-std::vector<ConstRegion> retrieveConstRegions(
-    const std::vector<double>& coarseBeats,
-    mixxx_impl::audio::SampleRate sr)
-{
-    if (coarseBeats.size() < 2) return {};
-
-    const int64_t maxPhase  = static_cast<int64_t>(kMaxSecsPhaseErr   * sr);
-    const int64_t maxPhaseS = static_cast<int64_t>(kMaxSecsPhaseErrSum * sr);
-    int L = 0, R = static_cast<int>(coarseBeats.size()) - 1;
-    std::vector<ConstRegion> regions;
-
-    while (L < static_cast<int>(coarseBeats.size()) - 1) {
-        const int64_t mBL = (coarseBeats[R] - coarseBeats[L]) /
-                            (static_cast<int64_t>(R) - static_cast<int64_t>(L));
-        int outliers = 0;
-        // ironedBeat is FramePos (int64), NOT double
-        int64_t ironedBeat = static_cast<int64_t>(coarseBeats[L]);
-        // phaseErrorSum is FrameDiff_t (int64), NOT double
-        int64_t phaseErrorSum = 0;
-        int i = L + 1;
-        for (; i <= R; ++i) {
-            ironedBeat += mBL;
-            const int64_t phaseError = ironedBeat - static_cast<int64_t>(coarseBeats[i]);
-            phaseErrorSum += phaseError;
-            if (std::abs(phaseError) > maxPhase) {
-                outliers++;
-                if (outliers > kMaxOutliers || i == L + 1) break;
-            }
-            if (std::abs(phaseErrorSum) > maxPhaseS) break;
-        }
-        if (i > R) {
-            int64_t bErr = 0;
-            if (R > L + 2) {
-                const int64_t fBL = static_cast<int64_t>(coarseBeats[L+1]) - static_cast<int64_t>(coarseBeats[L]);
-                const int64_t lBL = static_cast<int64_t>(coarseBeats[R]) - static_cast<int64_t>(coarseBeats[R-1]);
-                bErr = std::abs(fBL + lBL - 2 * mBL);
-            }
-            if (bErr < maxPhase / 2) {
-                regions.push_back({static_cast<int64_t>(coarseBeats[L]), mBL});
-                L = R;
-                R = static_cast<int>(coarseBeats.size()) - 1;
-                continue;
-            }
-        }
-        R--;
-    }
-    regions.push_back({static_cast<int64_t>(coarseBeats.back()), 0});
-
-    if (sr == 44100) {
-        std::fprintf(stderr, "[DEBUG] retrieveConstRegions: regions.size()=%zu\n", regions.size());
-        for (size_t i = 0; i < regions.size(); ++i) {
-            std::fprintf(stderr, "  region[%zu]: firstBeat=%lld, beatLength=%lld\n",
-                i, (long long)regions[i].firstBeat, (long long)regions[i].beatLength);
-        }
-    }
-    return regions;
-}
-
-/** Copied from beatutils.cpp trySnap */
-std::optional<mixxx_impl::Bpm> trySnap(
-        mixxx_impl::Bpm minBpm, mixxx_impl::Bpm centerBpm,
-        mixxx_impl::Bpm maxBpm, double fraction) {
-    const double snapped = round(centerBpm.value() * fraction) / fraction;
-    mixxx_impl::Bpm s(snapped);
-    if (s.value() > minBpm.value() && s.value() < maxBpm.value()) return s;
-    return std::nullopt;
-}
-
-/** Copied from beatutils.cpp roundBpmWithinRange */
-mixxx_impl::Bpm roundBpmWithinRange(
-        mixxx_impl::Bpm minBpm, mixxx_impl::Bpm centerBpm, mixxx_impl::Bpm maxBpm) {
-    auto snap = trySnap(minBpm, centerBpm, maxBpm, 1.0);
-    if (snap) return *snap;
-    if (centerBpm.value() < Bpm(85.0).value()) {
-        snap = trySnap(minBpm, centerBpm, maxBpm, 2.0);
-        if (snap) return *snap;
-    }
-    if (centerBpm.value() > Bpm(127.0).value()) {
-        snap = trySnap(minBpm, centerBpm, maxBpm, 2.0/3.0);
-        if (snap) return *snap;
-    }
-    snap = trySnap(minBpm, centerBpm, maxBpm, 3.0);
-    if (snap) return *snap;
-    snap = trySnap(minBpm, centerBpm, maxBpm, 12.0);
-    if (snap) return *snap;
-    return centerBpm;
-}
-
-/**
- * Copied from beatutils.cpp makeConstBpm.
- *
- * Find the longest constant-spacing region, compute centre BPM,
- * then snap to the nearest musical BPM value using the same
- * fractions (1, 2, 2/3, 3, 1/12) as Mixxx.
- */
-mixxx_impl::Bpm makeConstBpm(
-        const std::vector<ConstRegion>& regions,
-        mixxx_impl::audio::SampleRate sr) {
-    if (regions.empty()) return mixxx_impl::Bpm();
-
-    int midIdx   = 0;
-    int64_t longestLen   = 0;
-    int64_t longestBL    = 0;
-
-    for (int i = 0; i < static_cast<int>(regions.size()) - 1; ++i) {
-        const int64_t len = regions[i+1].firstBeat - regions[i].firstBeat;
-        if (len > longestLen) {
-            longestLen  = len;
-            longestBL   = regions[i].beatLength;
-            midIdx      = i;
-        }
-    }
-
-    if (longestLen == 0) return mixxx_impl::Bpm();
-
-    const int numBeats = static_cast<int>(
-            (longestLen / longestBL) + 0.5);
-    // beatLengthMin/Max are int64 (FrameDiff_t) — truncated per Mixxx
-    int64_t longestBLMin = longestBL
-            - static_cast<int64_t>((kMaxSecsPhaseErr * sr) / numBeats);
-    int64_t longestBLMax = longestBL
-            + static_cast<int64_t>((kMaxSecsPhaseErr * sr) / numBeats);
-
-    if (sr == 44100) {
-        std::fprintf(stderr, "[DEBUG] makeConstBpm: regions.size()=%zu\n", regions.size());
-        for (size_t i = 0; i < regions.size(); ++i) {
-            std::fprintf(stderr, "  region[%zu]: firstBeat=%lld, beatLength=%lld\n",
-                i, (long long)regions[i].firstBeat, (long long)regions[i].beatLength);
-        }
-        std::fprintf(stderr, "  midIdx=%d longestLen=%lld longestBL=%lld\n",
-            midIdx, (long long)longestLen, (long long)longestBL);
-        std::fprintf(stderr, "  numBeats=%d longestBLMin=%lld longestBLMax=%lld\n",
-            numBeats, (long long)longestBLMin, (long long)longestBLMax);
-    }
-    int startIdx = midIdx;
-
-    /* Expand forward */
-    for (int i = 0; i < midIdx; ++i) {
-        const int64_t len = regions[i+1].firstBeat - regions[i].firstBeat;
-        const int numberOfBeats = static_cast<int>(
-                (len / regions[i].beatLength) + 0.5);
-        if (numberOfBeats < kMinRegionBeats) continue;
-        const int64_t thisBLMin = regions[i].beatLength
-                - static_cast<int64_t>((kMaxSecsPhaseErr * sr) / numberOfBeats);
-        const int64_t thisBLMax = regions[i].beatLength
-                + static_cast<int64_t>((kMaxSecsPhaseErr * sr) / numberOfBeats);
-        if (longestBL > thisBLMin && longestBL < thisBLMax) {
-            const int64_t newLen = regions[midIdx+1].firstBeat - regions[i].firstBeat;
-            const int64_t beatLenMin = std::max<long long>(longestBLMin, thisBLMin);
-            const int64_t beatLenMax = std::min<long long>(longestBLMax, thisBLMax);
-            const int maxN = static_cast<int>(
-                    std::round(static_cast<double>(newLen) / static_cast<double>(beatLenMin)));
-            const int minN = static_cast<int>(
-                    std::round(static_cast<double>(newLen) / static_cast<double>(beatLenMax)));
-            if (minN != maxN) continue;
-            const int64_t newBeatLength = newLen / minN;
-            if (newBeatLength > longestBLMin && newBeatLength < longestBLMax) {
-                longestLen  = newLen;
-                longestBL   = newBeatLength;
-                longestBLMin = longestBL
-                        - static_cast<int64_t>((kMaxSecsPhaseErr * sr) / numBeats);
-                longestBLMax = longestBL
-                        + static_cast<int64_t>((kMaxSecsPhaseErr * sr) / numBeats);
-                startIdx    = i;
-                break;
-            }
-        }
-    }
-
-    /* Expand backward */
-    for (int i = static_cast<int>(regions.size()) - 2; i > midIdx; --i) {
-        const int64_t len = regions[i+1].firstBeat - regions[i].firstBeat;
-        const int numberOfBeats = static_cast<int>(
-                (len / regions[i].beatLength) + 0.5);
-        if (numberOfBeats < kMinRegionBeats) continue;
-        const int64_t thisBLMin = regions[i].beatLength
-                - static_cast<int64_t>((kMaxSecsPhaseErr * sr) / numberOfBeats);
-        const int64_t thisBLMax = regions[i].beatLength
-                + static_cast<int64_t>((kMaxSecsPhaseErr * sr) / numberOfBeats);
-        if (longestBL > thisBLMin && longestBL < thisBLMax) {
-            const int64_t newLen = regions[i+1].firstBeat - regions[startIdx].firstBeat;
-            const int64_t beatLenMin = std::max<long long>(longestBLMin, thisBLMin);
-            const int64_t beatLenMax = std::min<long long>(longestBLMax, thisBLMax);
-            const int maxN = static_cast<int>(
-                    std::round(static_cast<double>(newLen) / static_cast<double>(beatLenMin)));
-            const int minN = static_cast<int>(
-                    std::round(static_cast<double>(newLen) / static_cast<double>(beatLenMax)));
-            if (minN != maxN) continue;
-            const int64_t newBeatLength = newLen / minN;
-            if (newBeatLength > longestBLMin && newBeatLength < longestBLMax) {
-                longestLen  = newLen;
-                longestBL   = newBeatLength;
-                longestBLMin = longestBL
-                        - static_cast<int64_t>((kMaxSecsPhaseErr * sr) / numBeats);
-                longestBLMax = longestBL
-                        + static_cast<int64_t>((kMaxSecsPhaseErr * sr) / numBeats);
-                break;
-            }
-        }
-    }
-
-    const mixxx_impl::Bpm lo(60.0 * sr / longestBLMax);
-    const mixxx_impl::Bpm hi(60.0 * sr / longestBLMin);
-    const mixxx_impl::Bpm center(60.0 * sr / longestBL);
-    return roundBpmWithinRange(lo, center, hi);
-}
-
-} /* anonymous namespace */
-} /* namespace mixxx_impl */
-
-/* ====================================================================
- * Analysis pipeline
- */
 
 struct AnalysisResult {
     bool success                 = false;
@@ -466,12 +208,14 @@ AnalysisResult runBeatDetection(
          */
         result.bpmMethod = "musical";
 
-        using namespace mixxx_impl;
-        auto regions = retrieveConstRegions(
-            result.beatFramePositions,       /* sample-frame, NOT beats[i] */
-            static_cast<audio::SampleRate>(sampleRate));
-        const Bpm musical = makeConstBpm(
-            regions, static_cast<audio::SampleRate>(sampleRate));
+        /* Use BeatUtils from beatutils_standalone.h (double-precision per Mixxx) */
+        std::vector<audio::FramePos> framePosBeats;
+        framePosBeats.reserve(result.beatFramePositions.size());
+        for (double fp : result.beatFramePositions) {
+            framePosBeats.push_back(audio::FramePos(fp));
+        }
+        auto regions = BeatUtils::retrieveConstRegions(framePosBeats, sampleRate);
+        const Bpm musical = BeatUtils::makeConstBpm(regions, sampleRate, nullptr);
         result.estimatedBPM = musical.isValid() ? musical.value() : 0.0;
     }
 
@@ -505,7 +249,7 @@ AnalysisResult runBeatDetection(
     return result;
 }
 
-/* ====================================================================
+/* ============================================================================
  * entrypoint
  */
 
