@@ -4,7 +4,7 @@
 CXX     := g++
 CXXSTD  := -std=c++17
 CXXFLAGS := -O2 -Wall -Wextra $(CXXSTD)
-LDFLAGS  := -lm
+LDFLAGS  := -lm -lsndfile
 
 # Include paths: repo root, lib/, lib/qm-dsp/, lib/kissfft/
 INC := -I. -Ilib -I lib/qm-dsp -I lib/kissfft
