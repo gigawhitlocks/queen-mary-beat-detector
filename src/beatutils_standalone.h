@@ -276,7 +276,14 @@ public:
             }
         }
 
+        /* Recompute bounds after forward expansion (match Mixxx line 235-237) */
+        longestRegionBeatLengthMin = longestRegionBeatLength -
+                (kMaxSecsPhaseError * sr) / longestRegionNumberOfBeats;
+        longestRegionBeatLengthMax = longestRegionBeatLength +
+                (kMaxSecsPhaseError * sr) / longestRegionNumberOfBeats;
+
         /* Expand backward */
+
         for (int i = static_cast<int>(constantRegions.size()) - 2; i > midRegionIndex; --i) {
             audio::FrameDiff_t length =
                     constantRegions[i + 1].firstBeat.value() -
@@ -321,6 +328,19 @@ public:
                 (kMaxSecsPhaseError * sr) / longestRegionNumberOfBeats;
         longestRegionBeatLengthMax = longestRegionBeatLength +
                 (kMaxSecsPhaseError * sr) / longestRegionNumberOfBeats;
+
+        /* Debug output for comparison */
+        fprintf(stderr, "[MAKECONST_BPM_DEBUG]\n");
+        fprintf(stderr, "  midRegionIndex=%d startRegionIndex=%d\n", midRegionIndex, startRegionIndex);
+        fprintf(stderr, "  longestRegionLength=%f longestRegionBeatLength=%f longestRegionNumberOfBeats=%d\n",
+                longestRegionLength, longestRegionBeatLength, longestRegionNumberOfBeats);
+        fprintf(stderr, "  longestRegionBeatLengthMin=%f longestRegionBeatLengthMax=%f\n",
+                longestRegionBeatLengthMin, longestRegionBeatLengthMax);
+        fprintf(stderr, "  minRoundBpm=%f maxRoundBpm=%f centerBpm=%f\n",
+                60.0 * sr / longestRegionBeatLengthMax,
+                60.0 * sr / longestRegionBeatLengthMin,
+                60.0 * sr / longestRegionBeatLength);
+        fprintf(stderr, "  startRegionIndex=%d\n", startRegionIndex);
 
         const Bpm minRoundBpm = Bpm(60.0 * sr / longestRegionBeatLengthMax);
         const Bpm maxRoundBpm = Bpm(60.0 * sr / longestRegionBeatLengthMin);

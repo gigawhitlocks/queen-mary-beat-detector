@@ -1,3 +1,6 @@
+# NOTICE: this program was extracted from [Mixxx](https://github.com/mixxxdj/mixxx) by Qwen3.6:35B as an experiment
+## Everything that follows is robot-written. NO GUARANTEES
+
 # Queen Mary BPM — Standalone Beat Detection
 
 Standalone C++ library implementing the **Queen Mary University

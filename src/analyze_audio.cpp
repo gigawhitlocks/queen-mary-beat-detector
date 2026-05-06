@@ -109,8 +109,8 @@ AnalysisResult runBeatDetection(
         return result;
     }
 
-    /* Step 1: DF config */
-    int stepSizeSamples = int(round(sampleRate * 0.01161));
+    /* Step 1: DF config — match Mixxx exactly: truncation (not rounding) */
+    int stepSizeSamples = static_cast<int>(sampleRate * 0.01161f);
     int windowTarget = int(sampleRate / 50);
     int windowSize = 1;
     while (windowSize < windowTarget) windowSize <<= 1;
@@ -163,7 +163,7 @@ AnalysisResult runBeatDetection(
     /* Convert to actual frame positions (mirrors mixxx exactly) */
     result.success = true;
     for (size_t i2 = 0; i2 < beats.size(); ++i2) {
-        double framePos = beats[i2] * stepSizeSamples + double(stepSizeSamples) / 2.0;
+        double framePos = beats[i2] * stepSizeSamples + stepSizeSamples / 2;
         result.beatFramePositions.push_back(framePos);
         result.beatTimesSec.push_back(framePos / sampleRate);
     }
@@ -209,12 +209,27 @@ AnalysisResult runBeatDetection(
         result.bpmMethod = "musical";
 
         /* Use BeatUtils from beatutils_standalone.h (double-precision per Mixxx) */
+        fprintf(stderr, "[BEATS_DEBUG] First 10 beats (framePos):\n");
+        for (size_t j = 0; j < std::min((size_t)10, result.beatFramePositions.size()); ++j) {
+            fprintf(stderr, "  beat[%zu] = %.6f\n", j, result.beatFramePositions[j]);
+        }
+
         std::vector<audio::FramePos> framePosBeats;
         framePosBeats.reserve(result.beatFramePositions.size());
         for (double fp : result.beatFramePositions) {
             framePosBeats.push_back(audio::FramePos(fp));
         }
+
         auto regions = BeatUtils::retrieveConstRegions(framePosBeats, sampleRate);
+
+        /* Debug: print all regions */
+        fprintf(stderr, "[REGION_DEBUG] regions.size()=%zu\n", regions.size());
+        for (size_t i = 0; i < regions.size(); ++i) {
+            fprintf(stderr, "  region[%zu]: firstBeat=%.6f beatLength=%.6f\n",
+                i, regions[i].firstBeat.value(), regions[i].beatLength);
+        }
+        fprintf(stderr, "  beats.size()=%zu beatSize=%zu\n", framePosBeats.size(), framePosBeats.back().value());
+
         const Bpm musical = BeatUtils::makeConstBpm(regions, sampleRate, nullptr);
         result.estimatedBPM = musical.isValid() ? musical.value() : 0.0;
     }
